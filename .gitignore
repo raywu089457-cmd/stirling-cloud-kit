@@ -1,0 +1,3 @@
+# Stirling 的執行資料，不要進 repo
+data/
+*.log

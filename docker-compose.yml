@@ -1,0 +1,40 @@
+# Stirling PDF — 雲端自架部署包
+#
+# 設計重點：
+#   容器只綁 127.0.0.1，不對外開 port。
+#   對外一律走 Tailscale（tailscale serve），所以網際網路上掃不到這個服務。
+#
+# 啟動：docker compose up -d
+# 看 log：docker compose logs -f
+# 停止：docker compose down
+
+services:
+  stirling-pdf:
+    image: docker.stirlingpdf.com/stirlingtools/stirling-pdf:latest
+    container_name: stirling-pdf
+    restart: unless-stopped
+
+    # 只綁本機 loopback —— 這是安全性關鍵，不要改成 0.0.0.0
+    ports:
+      - "127.0.0.1:8080:8080"
+
+    environment:
+      TZ: Asia/Taipei
+      # 登入驗證交給 Tailscale 把關（只有你自己的裝置連得到），
+      # 所以這裡關掉，免得每次都要打帳密。
+      # 如果你之後要開放給別人用，改回 true 並在 UI 裡設一組密碼。
+      SECURITY_ENABLELOGIN: "false"
+    # 注意：不要設 JAVA_TOOL_OPTIONS。
+    # image 的啟動腳本會依下面的 mem_limit 自動計算 JVM 記憶體參數，
+    # 自己硬設反而會跟它打架。
+
+    volumes:
+      # 設定、資料庫、簽章憑證都放這裡，砍掉容器也不會消失
+      - ./data/configs:/configs
+      # OCR 語言包（第一次用到會自動下載）
+      - ./data/tessdata:/usr/share/tessdata
+      - ./data/logs:/logs
+
+    # 記憶體上限。VM 有 12GB，給 4GB 綽綽有餘（官方建議值）。
+    # 這行同時是 JVM 記憶體參數的計算依據，不要拿掉。
+    mem_limit: 4g

@@ -1,0 +1,83 @@
+#cloud-config
+#
+# Oracle Cloud（或任何 Ubuntu VM）開機自動安裝腳本
+#
+# 用法：在建立 VM 時，把這個檔案的內容整段貼到「Show advanced options」
+#      →「Initialization script」(Cloud-init) 的欄位裡。
+#
+# ★ 貼上去之前，先把下面的 TS_AUTHKEY 換成你自己的 Tailscale auth key ★
+#   取得方式：https://login.tailscale.com/admin/settings/keys
+#   建議勾選：Reusable、Ephemeral（可重複使用、VM 刪掉自動移除裝置）
+#   期限建議 90 天，之後再換新的就好
+
+package_update: true
+package_upgrade: true
+
+packages:
+  - curl
+  - ca-certificates
+  - gnupg
+
+write_files:
+  # ---------------------------------------------------------- 避免 OOM
+  - path: /etc/sysctl.d/99-stirling.conf
+    permissions: '0644'
+    content: |
+      vm.swappiness=10
+      vm.overcommit_memory=0
+
+  # ---------------------------------------------------- docker-compose
+  - path: /opt/stirling/docker-compose.yml
+    permissions: '0644'
+    content: |
+      services:
+        stirling-pdf:
+          image: docker.stirlingpdf.com/stirlingtools/stirling-pdf:latest
+          container_name: stirling-pdf
+          restart: unless-stopped
+          ports:
+            - "127.0.0.1:8080:8080"
+          environment:
+            TZ: Asia/Taipei
+            SECURITY_ENABLELOGIN: "false"
+          volumes:
+            - ./data/configs:/configs
+            - ./data/tessdata:/usr/share/tessdata
+            - ./data/logs:/logs
+          mem_limit: 4g
+
+runcmd:
+  # ------------------------------------------------------ 1. 系統設定
+  - sysctl --system
+  - mkdir -p /opt/stirling/data/configs /opt/stirling/data/tessdata /opt/stirling/data/logs
+
+  # ---------------------------------------------------------- 2. Docker
+  - curl -fsSL https://get.docker.com -o /tmp/get-docker.sh
+  - sh /tmp/get-docker.sh
+  - systemctl enable --now docker
+
+  # ------------------------------------------------------- 3. Tailscale
+  - curl -fsSL https://tailscale.com/install.sh | sh
+  - systemctl enable --now tailscaled
+  # ↓↓↓ 把下面這行的 TS_AUTHKEY 換成你自己的 key ↓↓↓
+  - tailscale up --authkey=tskey-auth-REPLACE_ME --hostname=stirling-vm --ssh --accept-routes=false
+
+  # ------------------------------------------------------ 4. 啟動服務
+  - cd /opt/stirling && docker compose up -d
+
+  # ------------------------------- 5. 用 Tailscale 代理（不對外開 port）
+  # 等 Stirling 真的活起來再設定代理
+  - |
+    for i in $(seq 1 60); do
+      if curl -fsS -o /dev/null http://localhost:8080/api/v1/info/status; then break; fi
+      sleep 5
+    done
+    tailscale serve --bg --http=8080 http://127.0.0.1:8080
+
+  # -------------------------------------------------------- 6. 完成標記
+  - echo "stirling-cloud-kit setup finished at $(date)" > /opt/stirling/INSTALL_DONE
+
+final_message: |
+  stirling-cloud-kit 安裝完成。
+  服務網址：http://<你的-VM-名稱>.<你的-tailnet>.ts.net:8080
+  檢查狀態：sudo docker compose -f /opt/stirling/docker-compose.yml ps
